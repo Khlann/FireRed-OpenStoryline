@@ -58,6 +58,15 @@
             <!-- JS 渲染历史会话 -->
           </div>
         </div>
+      <!-- 设置：模型/API 配置折叠组 -->
+      <div id="settingsGroup" class="sidebar-settings-group">
+        <button id="settingsGroupToggle" class="sidebar-settings-toggle" type="button" aria-expanded="true">
+          <span class="sidebar-settings-toggle-icon" aria-hidden="true">⚙</span>
+          <span class="sidebar-settings-toggle-text" data-i18n="sidebar.settings">设置</span>
+          <span class="sidebar-settings-toggle-chevron" aria-hidden="true">▾</span>
+        </button>
+        <div id="settingsGroupBody" class="sidebar-settings-body">
+
       <!-- LLM 配置：卡片包住 下拉框 + 自定义字段 -->
       <div id="llmBox" class="sidebar-panel" aria-label="LLM 配置">
         <div class="sidebar-panel-title">
@@ -295,6 +304,7 @@
           <div id="aiTransitionProviderFields"></div>
         </div>
 
+        </div>
       </div>
     </div>
   </aside>
@@ -351,6 +361,15 @@
             <span class="topbar-pill-text">Node Map</span>
           </a>
         </div>
+        <button id="sessionSwitcherBtn" class="topbar-pill topbar-session-btn" type="button"
+                data-i18n="topbar.sessions"
+                data-i18n-title="topbar.sessions_title"
+                data-i18n-aria-label="topbar.sessions_aria">
+          <svg class="os-icon" viewBox="0 0 24 24" aria-hidden="true" width="20" height="20">
+            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <span class="topbar-pill-text">会话</span>
+        </button>
         <div class="lang-switch" data-i18n-aria-label="topbar.lang_aria">
           <span class="lang-chip lang-zh" data-i18n="topbar.lang_zh">中</span>
 

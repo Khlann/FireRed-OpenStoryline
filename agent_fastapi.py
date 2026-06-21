@@ -33,7 +33,7 @@ except Exception:
 logger = logging.getLogger(__name__)
 
 import anyio
-from fastapi import FastAPI, APIRouter, UploadFile, File, Form, HTTPException, WebSocket, WebSocketDisconnect, Request
+from fastapi import FastAPI, APIRouter, UploadFile, File, Form, Body, HTTPException, WebSocket, WebSocketDisconnect, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
@@ -1307,6 +1307,7 @@ class ChatSession:
             SystemMessage(content=UPLOAD_STATUS_SYSTEM_EMPTY),
         ]
         self.history: List[Dict[str, Any]] = []
+        self.title: str = ""  # 用户自定义会话标题
 
         self.load_media: Dict[str, MediaMeta] = {}
         self.pending_media_ids: List[str] = []
@@ -1558,6 +1559,7 @@ class ChatSession:
             "version": 1,
             "session_id": self.session_id,
             "lang": self.lang,
+            "title": self.title,
             "history": self._persist_history(),
             "chat_model_key": self.chat_model_key,
             "vlm_model_key": self.vlm_model_key,
@@ -1713,6 +1715,7 @@ class ChatSession:
             sess.lang = "zh"
 
         sess.history = list(data.get("history") or [])
+        sess.title = str(data.get("title") or "")
         sess.chat_model_key = str(data.get("chat_model_key") or sess.chat_model_key)
         sess.vlm_model_key = str(data.get("vlm_model_key") or sess.vlm_model_key)
         try:
@@ -2274,6 +2277,49 @@ class SessionStore:
         except Exception as e:
             logger.warning("failed to persist session state. sid=%s err=%s", getattr(sess, "session_id", "?"), e)
 
+    @property
+    def _last_session_file(self) -> str:
+        return os.path.join(str(self.cfg.project.outputs_dir), ".last_session")
+
+    async def set_last_session(self, session_id: str) -> None:
+        """Track the most recently active session for cross-device resume."""
+        try:
+            path = self._last_session_file
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            tmp = path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                f.write(session_id)
+            os.replace(tmp, path)
+        except Exception as e:
+            logger.warning("failed to write last session: %s", e)
+
+    async def get_last_session(self) -> Optional[str]:
+        """Return the most recently active session id, if its state file still exists."""
+        try:
+            path = self._last_session_file
+            if not os.path.exists(path):
+                return None
+            with open(path, "r", encoding="utf-8") as f:
+                sid = f.read().strip()
+            if sid and os.path.exists(ChatSession.state_file_path_for(sid, self.cfg)):
+                return sid
+        except Exception as e:
+            logger.warning("failed to read last session: %s", e)
+        return None
+
+    async def delete(self, sid: str) -> bool:
+        """Remove a session from memory and delete its persisted directory."""
+        async with self._lock:
+            self._sessions.pop(sid, None)
+        session_dir = os.path.join(str(self.cfg.project.outputs_dir), sid)
+        if os.path.isdir(session_dir):
+            try:
+                await asyncio.to_thread(shutil.rmtree, session_dir, ignore_errors=True)
+                return True
+            except Exception as e:
+                logger.warning("failed to delete session directory %s: %s", session_dir, e)
+        return False
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -2517,6 +2563,7 @@ async def get_ai_transition_ui_schema():
 async def create_session():
     store: SessionStore = app.state.sessions
     sess = await store.create()
+    await store.set_last_session(sess.session_id)
     return JSONResponse(sess.snapshot())
 
 
@@ -2524,7 +2571,76 @@ async def create_session():
 async def get_session(session_id: str):
     store: SessionStore = app.state.sessions
     sess = await store.get_or_404(session_id)
+    await store.set_last_session(session_id)
     return JSONResponse(sess.snapshot())
+
+
+@api.delete("/sessions/{session_id}")
+async def delete_session(session_id: str):
+    """Delete a persisted session by id."""
+    store: SessionStore = app.state.sessions
+    await store.delete(session_id)
+    return JSONResponse({"ok": True})
+
+
+@api.patch("/sessions/{session_id}")
+async def update_session(session_id: str, body: dict = Body(...)):
+    """Update session metadata (currently supports title)."""
+    store: SessionStore = app.state.sessions
+    sess = await store.get_or_404(session_id)
+    if "title" in body:
+        sess.title = (body.get("title") or "").strip()
+        await store.save_session_state(sess)
+    return JSONResponse({"ok": True, "session_id": session_id, "title": sess.title})
+
+
+@api.get("/sessions-last")
+async def get_last_session_endpoint():
+    """Return the most recently active session id for cross-device resume."""
+    store: SessionStore = app.state.sessions
+    sid = await store.get_last_session()
+    return JSONResponse({"session_id": sid})
+
+
+@api.get("/sessions-recent")
+async def get_recent_sessions(limit: int = 20):
+    """Return recently persisted sessions so users can switch back to them."""
+    store: SessionStore = app.state.sessions
+    sessions: List[Dict[str, Any]] = []
+    outputs_dir = str(store.cfg.project.outputs_dir)
+    try:
+        candidates: List[Tuple[float, str]] = []
+        for name in os.listdir(outputs_dir):
+            session_dir = os.path.join(outputs_dir, name)
+            state_path = os.path.join(session_dir, SESSION_STATE_FILENAME)
+            if not os.path.isfile(state_path):
+                continue
+            try:
+                candidates.append((os.path.getmtime(state_path), name))
+            except Exception:
+                continue
+        for _, sid in sorted(candidates, key=lambda x: x[0], reverse=True)[:limit]:
+            try:
+                state_path = os.path.join(outputs_dir, sid, SESSION_STATE_FILENAME)
+                data = json.loads(open(state_path, "r", encoding="utf-8").read())
+                history = data.get("history") or []
+                preview = ""
+                for h in reversed(history):
+                    content = (h.get("content") or "").strip()
+                    if content:
+                        preview = content[:60]
+                        break
+                sessions.append({
+                    "session_id": data.get("session_id") or sid,
+                    "title": data.get("title", ""),
+                    "preview": preview,
+                    "updated_at": os.path.getmtime(state_path),
+                })
+            except Exception:
+                continue
+    except Exception as e:
+        logger.warning("Failed to list recent sessions: %s", e)
+    return JSONResponse({"sessions": sessions})
 
 
 @api.post("/sessions/{session_id}/clear")
@@ -3016,6 +3132,7 @@ async def ws_chat(ws: WebSocket, session_id: str):
             await ws.close(code=4404, reason="session not found")
             return
 
+        await store.set_last_session(session_id)
         await ws_send(ws, "session.snapshot", sess.snapshot())
 
         try:

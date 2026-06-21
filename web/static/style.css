@@ -291,6 +291,71 @@ body.sidebar-collapsed .sidebar-model{ display: none; }
 }
 
 /* =========================================================
+   Settings group (collapsible model/API config)
+   ========================================================= */
+.sidebar-settings-group{
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sidebar-settings-toggle{
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-weak);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.sidebar-settings-toggle:hover{
+  background: var(--surface-2);
+  border-color: var(--border);
+}
+
+.sidebar-settings-toggle-icon{
+  flex: 0 0 auto;
+  font-size: 14px;
+}
+
+.sidebar-settings-toggle-text{
+  flex: 1 1 auto;
+}
+
+.sidebar-settings-toggle-chevron{
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--muted);
+  transition: transform 0.18s ease;
+}
+
+.sidebar-settings-group.collapsed .sidebar-settings-toggle-chevron{
+  transform: rotate(-90deg);
+}
+
+.sidebar-settings-body{
+  display: flex;
+  flex-direction: column;
+  gap: var(--sidebar-panel-gap);
+}
+
+.sidebar-settings-body .sidebar-panel + .sidebar-panel{
+  margin-top: 0;
+}
+
+.sidebar-settings-group.collapsed .sidebar-settings-body{
+  display: none;
+}
+
+/* =========================================================
    Sidebar title help ( ? ) + tooltip
    ========================================================= */
 
@@ -527,6 +592,15 @@ body.sidebar-collapsed .sidebar-model{ display: none; }
   text-align: left;
   cursor: pointer;
   display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+}
+
+.session-history-main{
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
   flex-direction: column;
   gap: 2px;
 }
@@ -556,6 +630,35 @@ body.sidebar-collapsed .sidebar-model{ display: none; }
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.session-history-action{
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.7;
+  transition: opacity 0.12s ease, background 0.12s ease, color 0.12s ease;
+}
+
+.session-history-item:hover .session-history-action{
+  opacity: 1;
+}
+
+.session-history-action:hover{
+  background: rgba(0, 0, 0, 0.06);
+}
+
+.session-history-delete:hover{
+  background: rgba(239, 68, 68, 0.1);
+  color: #ef4444;
 }
 
 @keyframes session-history-flash{
@@ -2133,6 +2236,15 @@ body.dev-mode:not(.devbar-collapsed) #devbarToggle svg{
 }
 .topbar-pill:hover .topbar-pill-text,
 .topbar-pill:active .topbar-pill-text{
+  color: var(--text);
+}
+
+.topbar-session-btn .os-icon{
+  width: 20px;
+  height: 20px;
+  color: var(--muted);
+}
+.topbar-session-btn:hover .os-icon{
   color: var(--text);
 }
 

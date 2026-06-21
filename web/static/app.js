@@ -31,6 +31,9 @@ const __OS_I18N = {
     "topbar.link1": "github 链接",
     "topbar.link2": "使用手册",
     "topbar.node_map": "节点地图",
+    "topbar.sessions": "会话",
+    "topbar.sessions_title": "切换会话",
+    "topbar.sessions_aria": "切换会话",
 
     // aria
     "aria.sidebar": "侧边栏",
@@ -46,6 +49,13 @@ const __OS_I18N = {
     "sidebar.history_title": "对话历史",
     "sidebar.history_empty": "暂无历史会话",
     "sidebar.history_aria": "历史会话列表",
+    "sidebar.settings": "设置",
+    "sidebar.rename_session": "重命名",
+    "sidebar.delete_session": "删除",
+    "sidebar.rename_prompt": "输入新名称：",
+    "sidebar.rename_failed": "重命名失败",
+    "sidebar.delete_confirm": "确定要删除这个会话吗？此操作不可恢复。",
+    "sidebar.delete_failed": "删除失败",
     "sidebar.model_label": "对话模型",
     "sidebar.model_select_aria": "选择对话模型",
     "sidebar.custom_model_box_aria": "自定义模型配置",
@@ -155,6 +165,9 @@ const __OS_I18N = {
     "topbar.link1": "github link",
     "topbar.link2": "user guide",
     "topbar.node_map": "node map",
+    "topbar.sessions": "Sessions",
+    "topbar.sessions_title": "Switch session",
+    "topbar.sessions_aria": "Switch session",
 
     // aria
     "aria.sidebar": "Sidebar",
@@ -170,6 +183,13 @@ const __OS_I18N = {
     "sidebar.history_title": "History",
     "sidebar.history_empty": "No past chats yet",
     "sidebar.history_aria": "Chat history list",
+    "sidebar.settings": "Settings",
+    "sidebar.rename_session": "Rename",
+    "sidebar.delete_session": "Delete",
+    "sidebar.rename_prompt": "Enter new name:",
+    "sidebar.rename_failed": "Rename failed",
+    "sidebar.delete_confirm": "Are you sure you want to delete this chat? This cannot be undone.",
+    "sidebar.delete_failed": "Delete failed",
     "sidebar.model_label": "Chat model",
     "sidebar.model_select_aria": "Select chat model",
     "sidebar.custom_model_box_aria": "Custom model settings",
@@ -524,6 +544,34 @@ class ApiClient {
     if (!r.ok) {
       throw new HttpError(await this._readFetchError(r), r.status);
     }
+    return await r.json();
+  }
+
+  async getRecentSessions() {
+    const r = await fetch("/api/sessions-recent?limit=20");
+    if (!r.ok) throw new Error(await r.text());
+    return await r.json();
+  }
+
+  async getLastSession() {
+    const r = await fetch("/api/sessions-last");
+    if (!r.ok) throw new Error(await r.text());
+    return await r.json();
+  }
+
+  async deleteSession(sessionId) {
+    const r = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}`, { method: "DELETE" });
+    if (!r.ok) throw new Error(await r.text());
+    return await r.json();
+  }
+
+  async updateSession(sessionId, body) {
+    const r = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) throw new Error(await r.text());
     return await r.json();
   }
 
@@ -2453,6 +2501,9 @@ class App {
     this.quickPromptBtn = $("#quickPromptBtn");
     this._quickPromptIdx = 0;
     this.sidebarToggleBtn = $("#sidebarToggle");
+    this.sessionSwitcherBtn = $("#sessionSwitcherBtn");
+    this.settingsGroup = $("#settingsGroup");
+    this.settingsGroupToggle = $("#settingsGroupToggle");
     this.createDialogBtn = $("#createDialogBtn");
     this.devbarToggleBtn = $("#devbarToggle");
     this.devbarEl = $("#devbar");
@@ -2571,11 +2622,20 @@ class App {
     await this.loadProviderUiSchema("tts");
     await this.loadProviderUiSchema("ai_transition");
 
-    // 先加载本地会话列表
+    // 先加载本地会话列表，再与服务端同步（多端共享同一份最近会话）
     this.sessionHistory = this._loadSessionHistory();
+    try {
+      const serverHistory = await this._loadServerSessionHistory();
+      if (serverHistory.length) {
+        this.sessionHistory = serverHistory;
+        this._saveSessionHistory(this.sessionHistory);
+      }
+    } catch (e) {
+      console.warn("[session] failed to load server session history:", e);
+    }
     this._renderSessionHistory();
 
-    // 复用 localStorage 当前会话；如果失效就创建新 session
+    // 复用 localStorage 当前会话；如果失效就尝试服务端最后活跃会话（多端同步）
     const saved = localStorage.getItem(SESSION_ID_KEY);
     if (saved) {
       const st = await this._bootstrapRestoreSavedSession(saved);
@@ -2596,7 +2656,35 @@ class App {
       }
     }
 
+    try {
+      const last = await this.api.getLastSession();
+      if (last && last.session_id) {
+        const snap = await this.api.getSession(last.session_id);
+        await this.useSession(last.session_id, snap);
+        return;
+      }
+    } catch (e) {
+      console.warn("[bootstrap] failed to resume last session:", e);
+    }
+
     await this.newSession();
+  }
+
+  async _loadServerSessionHistory() {
+    const data = await this.api.getRecentSessions();
+    const sessions = (data && data.sessions) || [];
+    return sessions.map((s) => {
+      const updated_at = Number(s.updated_at) || 0;
+      const ms = updated_at > 1e10 ? updated_at : updated_at * 1000;
+      return {
+        id: String(s.session_id || ""),
+        title: String(s.title || "").trim(),
+        created_at: ms,
+        updated_at: ms,
+        last_preview: String(s.preview || "").trim(),
+        has_user: !!(s.preview || "").trim(),
+      };
+    }).filter((s) => s.id);
   }
 
   // ----- Session history (localStorage, per-browser) -----
@@ -2938,19 +3026,77 @@ class App {
         btn.classList.add("is-active");
       }
 
+      const mainEl = document.createElement("div");
+      mainEl.className = "session-history-main";
+
       const titleEl = document.createElement("div");
       titleEl.className = "session-history-title";
       titleEl.textContent = item.title || this._newChatTitle();
-      btn.appendChild(titleEl);
+      mainEl.appendChild(titleEl);
 
       if (item.last_preview) {
         const metaEl = document.createElement("div");
         metaEl.className = "session-history-meta";
         metaEl.textContent = item.last_preview;
-        btn.appendChild(metaEl);
+        mainEl.appendChild(metaEl);
       }
 
+      btn.appendChild(mainEl);
+
+      const renameBtn = document.createElement("span");
+      renameBtn.className = "session-history-action session-history-rename";
+      renameBtn.dataset.action = "rename";
+      renameBtn.dataset.sessionId = String(item.id);
+      renameBtn.title = __t("sidebar.rename_session") || "重命名";
+      renameBtn.textContent = "✎";
+      btn.appendChild(renameBtn);
+
+      const deleteBtn = document.createElement("span");
+      deleteBtn.className = "session-history-action session-history-delete";
+      deleteBtn.dataset.action = "delete";
+      deleteBtn.dataset.sessionId = String(item.id);
+      deleteBtn.title = __t("sidebar.delete_session") || "删除";
+      deleteBtn.textContent = "×";
+      btn.appendChild(deleteBtn);
+
       host.appendChild(btn);
+    }
+  }
+
+  async _renameSession(sessionId) {
+    const item = this._getSessionHistoryItem(sessionId);
+    const current = item ? item.title : "";
+    const name = prompt(__t("sidebar.rename_prompt") || "输入新名称：", current);
+    if (name === null) return;
+    try {
+      await this.api.updateSession(sessionId, { title: name.trim() });
+      if (Array.isArray(this.sessionHistory)) {
+        this.sessionHistory = this.sessionHistory.map((it) =>
+          it && it.id === sessionId ? { ...it, title: name.trim() } : it
+        );
+        this._saveSessionHistory(this.sessionHistory);
+      }
+      this._renderSessionHistory(this.sessionId);
+    } catch (e) {
+      console.error("[session] failed to rename:", e);
+      alert((__t("sidebar.rename_failed") || "重命名失败：") + " " + e.message);
+    }
+  }
+
+  async _deleteSession(sessionId) {
+    if (!confirm(__t("sidebar.delete_confirm") || "确定要删除这个会话吗？此操作不可恢复。")) return;
+    try {
+      await this.api.deleteSession(sessionId);
+      this._removeSessionFromHistory(sessionId);
+      if (sessionId === this.sessionId) {
+        localStorage.removeItem(SESSION_ID_KEY);
+        await this.newSession();
+      } else {
+        this._renderSessionHistory(this.sessionId);
+      }
+    } catch (e) {
+      console.error("[session] failed to delete:", e);
+      alert((__t("sidebar.delete_failed") || "删除失败：") + " " + e.message);
     }
   }
 
@@ -3265,6 +3411,21 @@ class App {
     document.body.classList.toggle("sidebar-collapsed");
     // const collapsed = document.body.classList.contains("sidebar-collapsed");
     // localStorage.setItem(SIDEBAR_COLLAPSED_KEY, collapsed ? "1" : "0");
+  }
+
+  toggleSettingsGroup() {
+    if (!this.settingsGroup || !this.settingsGroupToggle) return;
+    const collapsed = this.settingsGroup.classList.toggle("collapsed");
+    this.settingsGroupToggle.setAttribute("aria-expanded", String(!collapsed));
+    localStorage.setItem("openstoryline_settings_collapsed", collapsed ? "1" : "0");
+  }
+
+  _restoreSettingsGroupState() {
+    const v = localStorage.getItem("openstoryline_settings_collapsed");
+    if (v === "1") {
+      this.settingsGroup.classList.add("collapsed");
+      this.settingsGroupToggle.setAttribute("aria-expanded", "false");
+    }
   }
 
   _setLang(lang, { persist = true, syncServer = true } = {}) {
@@ -3641,6 +3802,19 @@ class App {
     if (this.sidebarToggleBtn) {
       this.sidebarToggleBtn.addEventListener("click", () => this.toggleSidebar());
     }
+    if (this.sessionSwitcherBtn) {
+      this.sessionSwitcherBtn.addEventListener("click", () => {
+        if (window.innerWidth <= 760 && document.body.classList.contains("sidebar-collapsed")) {
+          document.body.classList.remove("sidebar-collapsed");
+        } else {
+          this.toggleSidebar();
+        }
+      });
+    }
+    if (this.settingsGroupToggle && this.settingsGroup) {
+      this.settingsGroupToggle.addEventListener("click", () => this.toggleSettingsGroup());
+      this._restoreSettingsGroupState();
+    }
     if (this.createDialogBtn) {
       this.createDialogBtn.addEventListener("click", () => {
         if (this._isSwitchBlocked()) {
@@ -3654,6 +3828,18 @@ class App {
     if (this.sessionHistoryListEl && !this._sessionHistoryBound) {
       this._sessionHistoryBound = true;
       this.sessionHistoryListEl.addEventListener("click", async (e) => {
+        const actionBtn = e.target.closest("[data-action]");
+        if (actionBtn) {
+          const sid = String(actionBtn.dataset.sessionId || "").trim();
+          const action = String(actionBtn.dataset.action || "").trim();
+          if (action === "rename") {
+            await this._renameSession(sid);
+          } else if (action === "delete") {
+            await this._deleteSession(sid);
+          }
+          return;
+        }
+
         const target = e.target.closest("[data-session-id]");
         if (!target) return;
 
